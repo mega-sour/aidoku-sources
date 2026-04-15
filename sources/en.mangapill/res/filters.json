@@ -1,0 +1,14 @@
+[
+	{
+		"type": "select",
+		"id": "type",
+		"title": "Type",
+		"options": ["All", "Manga", "Novel", "One Shot", "Doujinshi", "Manhwa", "Manhua", "Oel"]
+	},
+	{
+		"type": "select",
+		"id": "status",
+		"title": "Status",
+		"options": ["All", "Publishing", "Finished", "On Haitus", "Discontinued"]
+	}
+]
