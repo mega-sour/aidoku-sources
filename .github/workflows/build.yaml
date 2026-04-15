@@ -1,0 +1,73 @@
+name: Build and Deploy Sources
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'sources/**'
+      - 'templates/**'
+      - '.github/workflows/build.yaml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/.cargo/bin
+            sources/**/target/
+            templates/**/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Add wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Install aidoku-cli
+        run: cargo install --git https://github.com/Aidoku/aidoku-rs aidoku-cli
+
+      - name: Build sources
+        run: |
+          for src in ./sources/*/; do
+            (cd "$src" && aidoku package)
+          done
+
+      - name: Build source list
+        run: aidoku build sources/*/package.aix --name "mega-sour Sources"
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public/
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
