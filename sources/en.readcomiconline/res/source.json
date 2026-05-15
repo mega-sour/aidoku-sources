@@ -2,18 +2,18 @@
 	"info": {
 		"id": "en.readcomiconline",
 		"name": "ReadComicOnline",
-		"version": 1,
-		"url": "https://readcomiconline.li",
+		"version": 2,
+		"url": "https://readcomicsonline.ru",
 		"contentRating": 0,
 		"languages": ["en"]
 	},
 	"listings": [
 		{
-			"id": "/Publisher/Marvel/LatestUpdate",
+			"id": "marvel",
 			"name": "Marvel Comics"
 		},
 		{
-			"id": "/Publisher/DC-Comics/LatestUpdate",
+			"id": "dc",
 			"name": "DC Comics"
 		}
 	]
