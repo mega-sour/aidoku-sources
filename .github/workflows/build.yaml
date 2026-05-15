@@ -42,7 +42,7 @@ jobs:
         run: rustup target add wasm32-unknown-unknown
 
       - name: Install aidoku-cli
-        run: cargo install --git https://github.com/Aidoku/aidoku-rs aidoku-cli
+        run: command -v aidoku || cargo install --git https://github.com/Aidoku/aidoku-rs aidoku-cli
 
       - name: Build sources
         run: |
