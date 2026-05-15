@@ -2,18 +2,18 @@
 	"info": {
 		"id": "en.readcomiconline",
 		"name": "ReadComicOnline",
-		"version": 2,
-		"url": "https://readcomicsonline.ru",
+		"version": 3,
+		"url": "https://rcostation.xyz",
 		"contentRating": 0,
 		"languages": ["en"]
 	},
 	"listings": [
 		{
-			"id": "marvel",
+			"id": "/Publisher/Marvel/LatestUpdate",
 			"name": "Marvel Comics"
 		},
 		{
-			"id": "dc",
+			"id": "/Publisher/DC-Comics/LatestUpdate",
 			"name": "DC Comics"
 		}
 	]
