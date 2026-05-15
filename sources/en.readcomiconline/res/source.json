@@ -2,7 +2,7 @@
 	"info": {
 		"id": "en.readcomiconline",
 		"name": "ReadComicOnline",
-		"version": 3,
+		"version": 4,
 		"url": "https://rcostation.xyz",
 		"contentRating": 0,
 		"languages": ["en"]
