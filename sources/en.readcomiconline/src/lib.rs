@@ -298,7 +298,9 @@ impl Source for ReadComicOnline {
 
 			let js_string =
 				format!("let _encryptedString = {data};let _useServer2 = false;{IMG_DECRYPT_EVAL}");
-			let result = JsContext::new().eval(&js_string)?;
+			let Ok(result) = JsContext::new().eval(&js_string) else {
+				continue;
+			};
 
 			if result.starts_with('[') && result.ends_with(']') {
 				let new_links: Vec<String> = result[1..result.len() - 1]
