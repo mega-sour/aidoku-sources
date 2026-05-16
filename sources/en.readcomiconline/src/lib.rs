@@ -288,7 +288,7 @@ impl Source for ReadComicOnline {
 		for script in scripts {
 			let Some(data) = script.data().and_then(|s| {
 				let s = s.trim();
-				if s.is_empty() {
+				if s.is_empty() || !s.contains("xnz") {
 					return None;
 				}
 				serde_json::to_string(&s).ok()
