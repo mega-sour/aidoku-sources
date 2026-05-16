@@ -513,7 +513,7 @@ impl DeepLinkHandler for ReadComicOnline {
 
 impl ImageRequestProvider for ReadComicOnline {
 	fn get_image_request(&self, url: String, _context: Option<PageContext>) -> Result<Request> {
-		Ok(Request::get(url)
+		Ok(Request::get(url)?
 			.header("Referer", &format!("{BASE_URL}/"))
 			.header("User-Agent", USER_AGENT))
 	}
