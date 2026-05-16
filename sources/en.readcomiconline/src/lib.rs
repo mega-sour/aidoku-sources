@@ -1,8 +1,8 @@
 #![no_std]
 use aidoku::{
 	Chapter, DeepLinkHandler, DeepLinkResult, FilterValue, Home, HomeComponent, HomeComponentValue,
-	HomeLayout, Listing, ListingProvider, Manga, MangaPageResult, MangaStatus, Page, PageContent,
-	Result, Source, Viewer,
+	HomeLayout, ImageRequestProvider, Listing, ListingProvider, Manga, MangaPageResult, MangaStatus,
+	Page, PageContent, Result, Source, Viewer,
 	alloc::{String, Vec, string::ToString, vec},
 	helpers::{
 		string::StripPrefixOrSelf,
@@ -511,4 +511,12 @@ impl DeepLinkHandler for ReadComicOnline {
 	}
 }
 
-register_source!(ReadComicOnline, ListingProvider, Home, DeepLinkHandler);
+impl ImageRequestProvider for ReadComicOnline {
+	fn image_request(&self, url: String) -> Request {
+		Request::get(url)
+			.header("Referer", &format!("{BASE_URL}/"))
+			.header("User-Agent", USER_AGENT)
+	}
+}
+
+register_source!(ReadComicOnline, ListingProvider, Home, DeepLinkHandler, ImageRequestProvider);
