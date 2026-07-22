@@ -8,7 +8,7 @@ use aidoku::{
 		html::{Document, Html},
 		js::WebView,
 		net::Request,
-		std::parse_date,
+		std::{parse_date, sleep},
 	},
 	prelude::*,
 };
@@ -17,6 +17,20 @@ const BASE_URL: &str = "https://readcomicsonline.ru";
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
 
 struct ReadComicOnline;
+
+// The challenge page itself finishes "loading" (and unblocks load_blocking) well before
+// its JS actually computes the proof-of-work and reloads into the real page - so after
+// the initial load, poll the live title and give it real wall-clock time to redirect
+// before giving up and reading whatever's there.
+fn wait_past_cloudflare(wv: &WebView) {
+	for _ in 0..5 {
+		let title = wv.eval("document.title").unwrap_or_default();
+		if !title.contains("Just a moment") {
+			return;
+		}
+		sleep(3);
+	}
+}
 
 // The site is behind Cloudflare's automatic JS challenge: a plain HTTP request gets a
 // non-200 response until the challenge script runs. Try a cheap direct request first
@@ -41,6 +55,7 @@ fn fetch_document(url: &str) -> Result<Document> {
 			.header("Referer", &format!("{BASE_URL}/"))
 			.header("User-Agent", USER_AGENT),
 	)?;
+	wait_past_cloudflare(&wv);
 	let html = wv.eval("document.documentElement.outerHTML")?;
 	Html::parse_with_url(html, url).map_err(|_| error!("failed to parse page"))
 }
@@ -63,6 +78,7 @@ fn fetch_text(url: &str) -> Result<String> {
 			.header("Referer", &format!("{BASE_URL}/"))
 			.header("User-Agent", USER_AGENT),
 	)?;
+	wait_past_cloudflare(&wv);
 	Ok(wv
 		.eval("document.body.textContent||document.body.innerText||''")
 		.unwrap_or_default())
