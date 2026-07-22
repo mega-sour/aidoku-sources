@@ -8,7 +8,7 @@ use aidoku::{
 		html::{Document, Html},
 		js::WebView,
 		net::Request,
-		std::{parse_date, sleep},
+		std::{parse_date, print, sleep},
 	},
 	prelude::*,
 };
@@ -23,13 +23,15 @@ struct ReadComicOnline;
 // the initial load, poll the live title and give it real wall-clock time to redirect
 // before giving up and reading whatever's there.
 fn wait_past_cloudflare(wv: &WebView) {
-	for _ in 0..5 {
+	for i in 0..5 {
 		let title = wv.eval("document.title").unwrap_or_default();
+		print(format!("[RCO] cf-wait #{i}: title={title:?}"));
 		if !title.contains("Just a moment") {
 			return;
 		}
 		sleep(3);
 	}
+	print("[RCO] cf-wait: gave up after 5 tries");
 }
 
 // The site is behind Cloudflare's automatic JS challenge: a plain HTTP request gets a
@@ -38,17 +40,25 @@ fn wait_past_cloudflare(wv: &WebView) {
 // only fall back to a real WebView load - slow, but capable of running the challenge JS -
 // when the fast path doesn't come back with a 200.
 fn fetch_document(url: &str) -> Result<Document> {
+	print(format!("[RCO] fetch_document: {url}"));
 	let request = Request::get(url)?
 		.header("Referer", &format!("{BASE_URL}/"))
 		.header("User-Agent", USER_AGENT);
 	if let Ok(response) = request.send() {
-		if response.status_code() == 200 {
+		let status = response.status_code();
+		print(format!("[RCO] fast path status={status}"));
+		if status == 200 {
 			if let Ok(doc) = response.get_html() {
+				print("[RCO] fast path succeeded");
 				return Ok(doc);
 			}
+			print("[RCO] fast path get_html() failed to parse");
 		}
+	} else {
+		print("[RCO] fast path request.send() errored");
 	}
 
+	print("[RCO] falling back to WebView");
 	let wv = WebView::new();
 	wv.load_blocking(
 		Request::get(url)?
@@ -57,21 +67,29 @@ fn fetch_document(url: &str) -> Result<Document> {
 	)?;
 	wait_past_cloudflare(&wv);
 	let html = wv.eval("document.documentElement.outerHTML")?;
+	print(format!("[RCO] webview html length={}", html.len()));
 	Html::parse_with_url(html, url).map_err(|_| error!("failed to parse page"))
 }
 
 fn fetch_text(url: &str) -> Result<String> {
+	print(format!("[RCO] fetch_text: {url}"));
 	let request = Request::get(url)?
 		.header("Referer", &format!("{BASE_URL}/"))
 		.header("User-Agent", USER_AGENT);
 	if let Ok(response) = request.send() {
-		if response.status_code() == 200 {
+		let status = response.status_code();
+		print(format!("[RCO] fast path status={status}"));
+		if status == 200 {
 			if let Ok(text) = response.get_string() {
+				print("[RCO] fast path succeeded");
 				return Ok(text);
 			}
 		}
+	} else {
+		print("[RCO] fast path request.send() errored");
 	}
 
+	print("[RCO] falling back to WebView");
 	let wv = WebView::new();
 	wv.load_blocking(
 		Request::get(url)?
@@ -79,9 +97,11 @@ fn fetch_text(url: &str) -> Result<String> {
 			.header("User-Agent", USER_AGENT),
 	)?;
 	wait_past_cloudflare(&wv);
-	Ok(wv
+	let text = wv
 		.eval("document.body.textContent||document.body.innerText||''")
-		.unwrap_or_default())
+		.unwrap_or_default();
+	print(format!("[RCO] webview text length={}", text.len()));
+	Ok(text)
 }
 
 impl Source for ReadComicOnline {
@@ -123,6 +143,7 @@ impl Source for ReadComicOnline {
 			manga.cover = html
 				.select_first("img[src*='/cover/']")
 				.and_then(|el| el.attr("abs:src"));
+			print(format!("[RCO] cover={:?}", manga.cover));
 			manga.description = html.select_first("p.leading-relaxed").and_then(|el| el.text());
 			manga.tags = html
 				.select("a[href*='/comic-list/category/']")
@@ -184,6 +205,10 @@ impl Source for ReadComicOnline {
 					.collect::<Vec<String>>()
 			})
 			.unwrap_or_default();
+		print(format!("[RCO] get_page_list: {} images found", links.len()));
+		if let Some(first) = links.first() {
+			print(format!("[RCO] first image: {first}"));
+		}
 
 		Ok(links
 			.into_iter()
@@ -280,6 +305,7 @@ fn parse_comic_list(html: Document, page: i32) -> MangaPageResult {
 
 impl ImageRequestProvider for ReadComicOnline {
 	fn get_image_request(&self, url: String, _context: Option<PageContext>) -> Result<Request> {
+		print(format!("[RCO] get_image_request: {url}"));
 		Ok(Request::get(url)?
 			.header("Referer", &format!("{BASE_URL}/"))
 			.header("User-Agent", USER_AGENT))
