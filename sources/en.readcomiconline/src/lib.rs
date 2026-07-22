@@ -10,7 +10,7 @@ use aidoku::{
 	},
 	imports::{
 		html::Document,
-		js::JsContext,
+		js::{JsContext, WebView},
 		net::Request,
 		std::{parse_date, send_partial_result},
 	},
@@ -270,46 +270,71 @@ impl Source for ReadComicOnline {
 
 	fn get_page_list(&self, _manga: Manga, chapter: Chapter) -> Result<Vec<Page>> {
 		let url = format!("{BASE_URL}{}", chapter.key);
-		let html = Request::get(url)?
-			.header("Referer", &format!("{BASE_URL}/"))
-			.header("User-Agent", USER_AGENT)
-			.html()?;
 
 		// todo: if the site changes often, this may need to be put in a separate file to request so that it can be updated without users updating the source
 		// (this is what the mihon source does)
 		const IMG_DECRYPT_EVAL: &str = "const assignRegex = /(_[^\\s=]*xnz)\\s*=\\s*['\"]([^'\"]+)['\"]/g;const matches = [..._encryptedString.matchAll(assignRegex)];const pageLinks = matches.map(m => decryptLink(m[2]));function atob(t){const e=\"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=\";let s=String(t).replace(/=+$/,\"\");if(s.length%4===1)throw new Error(\"'atob' failed: The string to be decoded is not correctly encoded.\");let n=\"\";for(let t=0,r,c,i=0;c=s.charAt(i++);~c&&(r=t%4?r*64+c:c,t++%4)?n+=String.fromCharCode(255&r>>(-2*t&6)):0)c=e.indexOf(c);return n}function decryptLink(t){let e=t.replace(/\\w{5}__\\w{3}__/g,\"g\").replace(/\\w{2}__\\w{6}_/g,\"g\").replace(/b/g,\"pw_.g28x\").replace(/h/g,\"d2pr.x_27\").replace(/pw_.g28x/g,\"b\").replace(/d2pr.x_27/g,\"h\");if(!e.startsWith(\"https\")){const t=e.indexOf(\"?\");const s=e.substring(t);const n=e.includes(\"=s0?\");const r=n?e.indexOf(\"=s0?\"):e.indexOf(\"=s1600?\");let c=e.substring(0,r);c=c.substring(15,33)+c.substring(50);const i=c.length;c=c.substring(0,i-11)+c[i-2]+c[i-1];const g=atob(c);let o=decodeURIComponent(g);o=o.substring(0,13)+o.substring(17);o=o.substring(0,o.length-2)+(n?\"=s0\":\"=s1600\");const a=!_useServer2?\"https://2.bp.blogspot.com\":\"https://img1.whatsnew247.net/pic\";e=`${a}/${o}${s}${_useServer2?\"&t=10\":\"\"}`}return e}JSON.stringify(pageLinks);";
 
-		let scripts = html
-			.select("script")
-			.ok_or(error!("html select `script` failed"))?;
+		// Fast path: try to decrypt inline xnz scripts using QuickJS (~1s, no UI)
+		let html = Request::get(&url)?
+			.header("Referer", &format!("{BASE_URL}/"))
+			.header("User-Agent", USER_AGENT)
+			.html()?;
 
 		let mut links = Vec::new();
 
-		for script in scripts {
-			let Some(data) = script.data().and_then(|s| {
-				let s = s.trim();
-				if s.is_empty() || !s.contains("xnz") {
-					return None;
+		if let Some(scripts) = html.select("script") {
+			for script in scripts {
+				let Some(data) = script.data().and_then(|s| {
+					let s = s.trim();
+					if s.is_empty() || !s.contains("xnz") {
+						return None;
+					}
+					serde_json::to_string(&s).ok()
+				}) else {
+					continue;
+				};
+
+				let js_string = format!(
+					"let _encryptedString = {data};let _useServer2 = false;{IMG_DECRYPT_EVAL}"
+				);
+				let Ok(result) = JsContext::new().eval(&js_string) else {
+					continue;
+				};
+
+				if result.starts_with('[') && result.ends_with(']') {
+					let new_links: Vec<String> = result[1..result.len() - 1]
+						.split(',')
+						.map(|s| s.trim_matches(|c| c == '"' || c == '\''))
+						.filter(|s| !s.is_empty())
+						.map(|s| s.to_string())
+						.collect();
+					links.extend(new_links);
 				}
-				serde_json::to_string(&s).ok()
-			}) else {
-				continue;
-			};
+			}
+		}
 
-			let js_string =
-				format!("let _encryptedString = {data};let _useServer2 = false;{IMG_DECRYPT_EVAL}");
-			let Ok(result) = JsContext::new().eval(&js_string) else {
-				continue;
-			};
-
-			if result.starts_with('[') && result.ends_with(']') {
-				let new_links: Vec<String> = result[1..result.len() - 1]
-					.split(',')
-					.map(|s| s.trim_matches(|c| c == '"' || c == '\''))
-					.filter(|s| !s.is_empty())
-					.map(|s| s.to_string())
-					.collect();
-				links.extend(new_links);
+		// Slow path: site is using anti-bot JS injection — xnz scripts not in static HTML.
+		// Load the page in WKWebView so the anti-bot JS executes and populates _papaLoaded,
+		// then extract the image URLs from that array (~4-8s, requires WKWebView support).
+		if links.is_empty() {
+			// readType=1 loads all images at once, which may trigger full _papaLoaded population
+			let readall_url = format!("{url}?readType=1");
+			let request = Request::get(&readall_url)?
+				.header("Referer", &format!("{BASE_URL}/"))
+				.header("User-Agent", USER_AGENT);
+			let wv = WebView::new();
+			if wv.load_blocking(request).is_ok() {
+				let js = "typeof _papaLoaded!=='undefined'\
+					?JSON.stringify(_papaLoaded.filter(function(u){return u&&u.indexOf('http')===0}))\
+					:'[]'";
+				if let Ok(json) = wv.eval(js) {
+					if json.starts_with('[') && json.len() > 2 {
+						if let Ok(urls) = serde_json::from_str::<Vec<String>>(&json) {
+							links.extend(urls);
+						}
+					}
+				}
 			}
 		}
 
