@@ -22,13 +22,16 @@ const FLARESOLVERR_URL: &str = "http://100.93.178.119:8191/v1";
 
 struct ReadComicOnline;
 
-// Ask FlareSolverr (real desktop Chrome, better IP reputation than a mobile WebView) to
-// solve the challenge and hand back the resolved page body. Returns None on any failure
-// so callers can fall through to the WebView path without special-casing errors.
-fn fetch_via_flaresolverr(url: &str) -> Option<String> {
-	let escaped_url = url.replace('\\', "\\\\").replace('"', "\\\"");
-	let body = format!(r#"{{"cmd":"request.get","url":"{escaped_url}","maxTimeout":30000}}"#);
-	print(format!("[RCO] trying flaresolverr for {url}"));
+// Cached FlareSolverr session id, reused across calls within this wasm instance's
+// lifetime. Without this, every single request.get spins up a brand-new headless
+// Chrome (confirmed ~12s each, and multiple concurrent fetches would each spin up
+// their own instance and compete for resources - this is what caused a 60s+ timeout
+// in practice). With a shared session, only the very first call pays the full solve
+// cost; subsequent calls (even concurrent ones, confirmed by direct testing) reuse
+// the same browser context and its already-valid cookies, coming back in ~1-2s.
+static FLARESOLVERR_SESSION: spin::Mutex<Option<String>> = spin::Mutex::new(None);
+
+fn flaresolverr_request(body: &str) -> Option<serde_json::Value> {
 	let response = Request::post(FLARESOLVERR_URL)
 		.ok()?
 		.header("Content-Type", "application/json")
@@ -36,16 +39,49 @@ fn fetch_via_flaresolverr(url: &str) -> Option<String> {
 		.send()
 		.ok()?;
 	if response.status_code() != 200 {
-		print(format!(
-			"[RCO] flaresolverr http status={}",
-			response.status_code()
-		));
+		print(format!("[RCO] flaresolverr http status={}", response.status_code()));
 		return None;
 	}
 	let text = response.get_string().ok()?;
-	let json: serde_json::Value = serde_json::from_str(&text).ok()?;
+	serde_json::from_str(&text).ok()
+}
+
+fn get_or_create_flaresolverr_session() -> Option<String> {
+	if let Some(id) = FLARESOLVERR_SESSION.lock().as_ref() {
+		return Some(id.clone());
+	}
+	print("[RCO] creating flaresolverr session");
+	let json = flaresolverr_request(r#"{"cmd":"sessions.create"}"#)?;
 	if json.get("status")?.as_str()? != "ok" {
+		print(format!("[RCO] session create failed: {:?}", json.get("message")));
+		return None;
+	}
+	let session = json.get("session")?.as_str()?.to_string();
+	print(format!("[RCO] session created: {session}"));
+	*FLARESOLVERR_SESSION.lock() = Some(session.clone());
+	Some(session)
+}
+
+// Ask FlareSolverr (real desktop Chrome, better IP reputation than a mobile WebView) to
+// solve the challenge and hand back the resolved page body. Returns None on any failure
+// (including "no session available") so callers can fall through to the WebView path
+// without special-casing errors. Any failure also clears the cached session, so a
+// stale/destroyed session on the server side gets recreated on the next call rather
+// than repeatedly failing.
+fn fetch_via_flaresolverr(url: &str) -> Option<String> {
+	let session = get_or_create_flaresolverr_session()?;
+	let escaped_url = url.replace('\\', "\\\\").replace('"', "\\\"");
+	let body = format!(
+		r#"{{"cmd":"request.get","url":"{escaped_url}","session":"{session}","maxTimeout":20000}}"#
+	);
+	print(format!("[RCO] trying flaresolverr for {url}"));
+	let Some(json) = flaresolverr_request(&body) else {
+		*FLARESOLVERR_SESSION.lock() = None;
+		return None;
+	};
+	if json.get("status").and_then(|s| s.as_str()) != Some("ok") {
 		print(format!("[RCO] flaresolverr status={:?}", json.get("message")));
+		*FLARESOLVERR_SESSION.lock() = None;
 		return None;
 	}
 	let html = json.get("solution")?.get("response")?.as_str()?.to_string();
