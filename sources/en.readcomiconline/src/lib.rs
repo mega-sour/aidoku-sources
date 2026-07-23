@@ -305,10 +305,10 @@ fn parse_comic_list(html: Document, page: i32) -> MangaPageResult {
 
 impl ImageRequestProvider for ReadComicOnline {
 	fn get_image_request(&self, url: String, _context: Option<PageContext>) -> Result<Request> {
+		// cdn.readcomicsonline.ru doesn't need Referer/User-Agent (unlike the old
+		// blogspot-hosted images) - a bare request works. Just log what's requested.
 		print(format!("[RCO] get_image_request: {url}"));
-		Ok(Request::get(url)?
-			.header("Referer", &format!("{BASE_URL}/"))
-			.header("User-Agent", USER_AGENT))
+		Ok(Request::get(url)?)
 	}
 }
 
