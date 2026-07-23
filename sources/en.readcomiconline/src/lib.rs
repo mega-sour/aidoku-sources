@@ -15,8 +15,43 @@ use aidoku::{
 
 const BASE_URL: &str = "https://readcomicsonline.ru";
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
+// Self-hosted FlareSolverr on the homelab, reachable over Tailscale. Only ever hit if
+// the fast path 403s; if it's unreachable (off the tailnet, box down), every call here
+// just fails fast and the on-device WebView fallback takes over - never a hard dependency.
+const FLARESOLVERR_URL: &str = "http://100.93.178.119:8191/v1";
 
 struct ReadComicOnline;
+
+// Ask FlareSolverr (real desktop Chrome, better IP reputation than a mobile WebView) to
+// solve the challenge and hand back the resolved page body. Returns None on any failure
+// so callers can fall through to the WebView path without special-casing errors.
+fn fetch_via_flaresolverr(url: &str) -> Option<String> {
+	let escaped_url = url.replace('\\', "\\\\").replace('"', "\\\"");
+	let body = format!(r#"{{"cmd":"request.get","url":"{escaped_url}","maxTimeout":30000}}"#);
+	print(format!("[RCO] trying flaresolverr for {url}"));
+	let response = Request::post(FLARESOLVERR_URL)
+		.ok()?
+		.header("Content-Type", "application/json")
+		.body(body.as_bytes())
+		.send()
+		.ok()?;
+	if response.status_code() != 200 {
+		print(format!(
+			"[RCO] flaresolverr http status={}",
+			response.status_code()
+		));
+		return None;
+	}
+	let text = response.get_string().ok()?;
+	let json: serde_json::Value = serde_json::from_str(&text).ok()?;
+	if json.get("status")?.as_str()? != "ok" {
+		print(format!("[RCO] flaresolverr status={:?}", json.get("message")));
+		return None;
+	}
+	let html = json.get("solution")?.get("response")?.as_str()?.to_string();
+	print(format!("[RCO] flaresolverr succeeded, length={}", html.len()));
+	Some(html)
+}
 
 // The challenge page itself finishes "loading" (and unblocks load_blocking) well before
 // its JS actually computes the proof-of-work and reloads into the real page - so after
@@ -58,6 +93,10 @@ fn fetch_document(url: &str) -> Result<Document> {
 		print("[RCO] fast path request.send() errored");
 	}
 
+	if let Some(html) = fetch_via_flaresolverr(url) {
+		return Html::parse_with_url(html, url).map_err(|_| error!("failed to parse page"));
+	}
+
 	print("[RCO] falling back to WebView");
 	let wv = WebView::new();
 	// Deliberately bare: no forced User-Agent (WebView is a real mobile WebKit engine,
@@ -87,6 +126,22 @@ fn fetch_text(url: &str) -> Result<String> {
 		}
 	} else {
 		print("[RCO] fast path request.send() errored");
+	}
+
+	if let Some(text) = fetch_via_flaresolverr(url) {
+		// Chrome (which FlareSolverr drives) wraps non-HTML responses like our JSON
+		// endpoint in its own viewer: <html>...<body><pre>{...}</pre></body></html>.
+		// Unwrap that back to the raw body if present.
+		let unwrapped = text
+			.find("<pre")
+			.and_then(|start| text[start..].find('>').map(|i| start + i + 1))
+			.and_then(|body_start| {
+				text[body_start..]
+					.find("</pre>")
+					.map(|end| text[body_start..body_start + end].to_string())
+			})
+			.unwrap_or(text);
+		return Ok(unwrapped);
 	}
 
 	print("[RCO] falling back to WebView");
