@@ -60,11 +60,11 @@ fn fetch_document(url: &str) -> Result<Document> {
 
 	print("[RCO] falling back to WebView");
 	let wv = WebView::new();
-	// Don't force a desktop User-Agent here - the WebView is a real mobile WebKit engine,
-	// and a header claiming "desktop Chrome" while the JS/canvas fingerprint says
-	// otherwise is exactly the kind of mismatch Cloudflare's bot check flags, likely
-	// causing it to re-challenge more than it would for a consistent, natural fingerprint.
-	wv.load_blocking(Request::get(url)?.header("Referer", &format!("{BASE_URL}/")))?;
+	// Deliberately bare: no forced User-Agent (WebView is a real mobile WebKit engine,
+	// claiming "desktop Chrome" is a fingerprint mismatch) and no forced Referer (a fresh
+	// top-level load has no real previous page, so a real browser wouldn't send one
+	// either). Let the WebView look exactly like what it actually is.
+	wv.load_blocking(Request::get(url)?)?;
 	wait_past_cloudflare(&wv);
 	let html = wv.eval("document.documentElement.outerHTML")?;
 	print(format!("[RCO] webview html length={}", html.len()));
@@ -91,7 +91,7 @@ fn fetch_text(url: &str) -> Result<String> {
 
 	print("[RCO] falling back to WebView");
 	let wv = WebView::new();
-	wv.load_blocking(Request::get(url)?.header("Referer", &format!("{BASE_URL}/")))?;
+	wv.load_blocking(Request::get(url)?)?;
 	wait_past_cloudflare(&wv);
 	let text = wv
 		.eval("document.body.textContent||document.body.innerText||''")
