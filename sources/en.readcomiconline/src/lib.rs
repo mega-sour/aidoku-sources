@@ -7,7 +7,7 @@ use aidoku::{
 	imports::{
 		html::{Document, Html},
 		js::WebView,
-		net::Request,
+		net::{Request, TimeUnit, set_rate_limit},
 		std::{parse_date, print, sleep},
 	},
 	prelude::*,
@@ -193,6 +193,13 @@ fn fetch_text(url: &str) -> Result<String> {
 
 impl Source for ReadComicOnline {
 	fn new() -> Self {
+		// Bulk chapter downloads were firing bursts of ~5 concurrent image requests
+		// per chapter with no pacing, and a consistent handful were failing under
+		// that burst every single chapter (logs showed this happening on nearly
+		// every chapter of a multi-chapter download, not as a rare fluke). Queue
+		// anything past this rate instead of firing it all at once - covers both
+		// image bursts and the once-per-chapter page fetch under one limit.
+		set_rate_limit(6, 1, TimeUnit::Seconds);
 		Self
 	}
 
