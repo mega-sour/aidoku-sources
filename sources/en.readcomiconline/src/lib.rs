@@ -14,7 +14,6 @@ use aidoku::{
 };
 
 const BASE_URL: &str = "https://readcomicsonline.ru";
-const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
 // Self-hosted FlareSolverr on the homelab, reachable over Tailscale. Only ever hit if
 // the fast path 403s; if it's unreachable (off the tailnet, box down), every call here
 // just fails fast and the on-device WebView fallback takes over - never a hard dependency.
@@ -105,29 +104,18 @@ fn wait_past_cloudflare(wv: &WebView) {
 	print("[RCO] cf-wait: gave up after 5 tries");
 }
 
-// The site is behind Cloudflare's automatic JS challenge: a plain HTTP request gets a
-// non-200 response until the challenge script runs. Try a cheap direct request first
-// (works once a prior WebView load has warmed up the session's clearance cookie), and
-// only fall back to a real WebView load - slow, but capable of running the challenge JS -
-// when the fast path doesn't come back with a 200.
+// The site is behind Cloudflare. Do NOT make a plain Request::send() to it first as a
+// "fast path": the 403 challenge body contains `challenge-error-text` with a
+// `Server: cloudflare` header, which is exactly what the app's own CloudflareHandler
+// watches for on every source request. It responds by opening its own WebView and, if
+// it finds a Turnstile widget, showing the user an interactive "Verify you are human"
+// popup. Since that fast path 403'd 100% of the time (and structurally can't ever
+// succeed - FlareSolverr's clearance cookie lives in Chrome on the homelab box, never
+// in the phone's cookie jar), it was doing nothing but triggering that popup once per
+// page fetch. Go straight to FlareSolverr, and keep the on-device WebView - which
+// loads via a different host path that does NOT feed CloudflareHandler - as fallback.
 fn fetch_document(url: &str) -> Result<Document> {
 	print(format!("[RCO] fetch_document: {url}"));
-	let request = Request::get(url)?
-		.header("Referer", &format!("{BASE_URL}/"))
-		.header("User-Agent", USER_AGENT);
-	if let Ok(response) = request.send() {
-		let status = response.status_code();
-		print(format!("[RCO] fast path status={status}"));
-		if status == 200 {
-			if let Ok(doc) = response.get_html() {
-				print("[RCO] fast path succeeded");
-				return Ok(doc);
-			}
-			print("[RCO] fast path get_html() failed to parse");
-		}
-	} else {
-		print("[RCO] fast path request.send() errored");
-	}
 
 	if let Some(html) = fetch_via_flaresolverr(url) {
 		return Html::parse_with_url(html, url).map_err(|_| error!("failed to parse page"));
@@ -148,21 +136,6 @@ fn fetch_document(url: &str) -> Result<Document> {
 
 fn fetch_text(url: &str) -> Result<String> {
 	print(format!("[RCO] fetch_text: {url}"));
-	let request = Request::get(url)?
-		.header("Referer", &format!("{BASE_URL}/"))
-		.header("User-Agent", USER_AGENT);
-	if let Ok(response) = request.send() {
-		let status = response.status_code();
-		print(format!("[RCO] fast path status={status}"));
-		if status == 200 {
-			if let Ok(text) = response.get_string() {
-				print("[RCO] fast path succeeded");
-				return Ok(text);
-			}
-		}
-	} else {
-		print("[RCO] fast path request.send() errored");
-	}
 
 	if let Some(text) = fetch_via_flaresolverr(url) {
 		// Chrome (which FlareSolverr drives) wraps non-HTML responses like our JSON
